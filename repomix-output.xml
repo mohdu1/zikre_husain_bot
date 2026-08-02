@@ -1,0 +1,538 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.env.example
+.gitignore
+bot.py
+config.py
+requirements.txt
+sheets.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".env.example">
+BOT_TOKEN=your_telegram_bot_token_here
+SHEET_ID=your_google_sheet_id_here
+ADMIN_CHAT_ID=your_telegram_id_here
+SERVICE_ACCOUNT_FILE=service_account.json
+</file>
+
+<file path=".gitignore">
+.env
+service_account.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+</file>
+
+<file path="bot.py">
+import logging
+from datetime import time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
+)
+import config
+from sheets import db
+
+# Logging setup
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Conversation States
+ONBOARDING_NAME, RIYAZ_INPUT, VOICE_NOTE_INPUT = range(3)
+
+# --- UI Layouts ---
+def get_main_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Log Attendance", callback_data="menu_attendance")],
+        [InlineKeyboardButton("🎙️ Log Individual Riyaz", callback_data="menu_riyaz")],
+        [InlineKeyboardButton("🔊 Submit Voice Note", callback_data="menu_voice")],
+        [InlineKeyboardButton("📊 View Weekly Progress", callback_data="menu_progress")]
+    ])
+
+
+def get_attendance_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Raudat Tahera Majlis", callback_data="att_Raudat Tahera Majlis")],
+        [InlineKeyboardButton("Darees Majlis", callback_data="att_Darees Majlis")],
+        [InlineKeyboardButton("Party Practice", callback_data="att_Party Practice")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="menu_back")]
+    ])
+
+
+def get_riyaz_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Only Riyaz", callback_data="riyaz_Only Riyaz")],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data="menu_back")]
+    ])
+
+
+# --- Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /start command and onboarding check."""
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+
+    if user:
+        await update.message.reply_text(
+            f"Welcome back, **{user['Name']}**! 🌙\nHow can I assist your Zikre Husain routine today?",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text(
+            "Welcome to the **Zikre Husain Tracking Bot**! 🌙\n\n"
+            "It looks like you are new here. Please reply with your **Full Name** to complete your registration.",
+            parse_mode="Markdown"
+        )
+        return ONBOARDING_NAME
+
+
+async def save_new_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Saves newly onboarded user."""
+    full_name = update.message.text.strip()
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    db.register_user(user_id, chat_id, full_name)
+    await update.message.reply_text(
+        f"Jazakallah, **{full_name}**! You are now registered.\nUse the menu below to log your activities:",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Routes main menu inline button clicks."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_attendance":
+        await query.edit_message_text(
+            "📅 **Select Activity to Log Attendance:**",
+            reply_markup=get_attendance_keyboard(),
+            parse_mode="Markdown"
+        )
+    elif query.data == "menu_riyaz":
+        await query.edit_message_text(
+            "🎙️ **Log Individual Riyaz**\n\n"
+            "Type the name of the Kalaam you practiced today in the chat below, or click **'Only Riyaz'**:",
+            reply_markup=get_riyaz_keyboard(),
+            parse_mode="Markdown"
+        )
+        return RIYAZ_INPUT
+    elif query.data == "menu_voice":
+        await query.edit_message_text(
+            "🔊 **Submit Voice Note**\n\n"
+            "Please record and send your Telegram Voice Note or Audio file now. "
+            "It will be forwarded directly to the group Admin for review.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Cancel", callback_data="menu_back")]]),
+            parse_mode="Markdown"
+        )
+        return VOICE_NOTE_INPUT
+    elif query.data == "menu_progress":
+        await show_progress(query, update.effective_user.id)
+    elif query.data == "menu_back":
+        await query.edit_message_text(
+            "🌙 **Main Menu:** Select an option below:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+
+async def log_attendance_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles attendance logging."""
+    query = update.callback_query
+    await query.answer()
+
+    activity = query.data.split("att_")[1]
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    name = user["Name"] if user else "Unknown Member"
+
+    success, message = db.log_attendance(user_id, name, activity)
+    await query.edit_message_text(
+        f"{message}\n\nWhat else would you like to do?",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+
+async def handle_riyaz_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles text input for Riyaz kalaam."""
+    kalaam = update.message.text.strip()
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    name = user["Name"] if user else "Unknown Member"
+
+    success, message = db.log_riyaz(user_id, name, kalaam)
+    await update.message.reply_text(
+        f"{message}\n\nReturning to Main Menu:",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def handle_riyaz_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles 'Only Riyaz' inline button."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        await query.edit_message_text(
+            "🌙 **Main Menu:**",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    kalaam = "Only Riyaz"
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    name = user["Name"] if user else "Unknown Member"
+
+    success, message = db.log_riyaz(user_id, name, kalaam)
+    await query.edit_message_text(
+        f"{message}\n\nWhat else would you like to do?",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def handle_voice_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Forwards received audio/voice to Admin."""
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    name = user["Name"] if user else f"User {user_id}"
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_CHAT_ID,
+            text=f"🎙️ **New Voice Note Submission**\nFrom: {name} (ID: `{user_id}`)",
+            parse_mode="Markdown"
+        )
+        await update.message.forward(chat_id=config.ADMIN_CHAT_ID)
+
+        await update.message.reply_text(
+            "✅ Your voice note has been successfully submitted to the Admin!\n\nReturning to Main Menu:",
+            reply_markup=get_main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Failed to forward voice note: {e}")
+        await update.message.reply_text(
+            "❌ Could not forward voice note to Admin. Please check if the bot is blocked by the Admin ID.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    return ConversationHandler.END
+
+
+async def show_progress(query, user_id: int):
+    """Generates and displays the weekly progress bar."""
+    days_logged = db.get_weekly_progress(user_id)
+    goal = 5
+    progress = min(days_logged, goal)
+
+    filled = "█" * (progress * 2)
+    empty = "░" * ((goal - progress) * 2)
+    bar = f"[{filled}{empty}]"
+
+    if days_logged >= goal:
+        msg = "Masha'Allah! You have hit your weekly consistency goal! Keep the momentum going! 🌟"
+    elif days_logged >= 3:
+        msg = "Great consistency! Just a couple more days to reach your weekly target! 👍"
+    else:
+        msg = "Every drop counts. Let's try to log more Riyaz and attendance this week! 🤲"
+
+    await query.edit_message_text(
+        f"📊 **Your 7-Day Activity Progress**\n\n"
+        f"`{bar}` **{days_logged}/7 Days Logged**\n\n"
+        f"*{msg}*",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+
+async def daily_broadcast(context: ContextTypes.DEFAULT_TYPE):
+    """11 PM IST Job to send daily check-in reminder."""
+    logger.info("Executing 11 PM daily broadcast...")
+    chat_ids = db.get_all_chat_ids()
+
+    text = "🌙 **Daily Check-In:**\nDon't forget to log your Zikre Husain attendance and Riyaz for today!"
+
+    for chat_id in set(chat_ids):
+        try:
+            await context.bot.send_message(
+                chat_id=int(chat_id),
+                text=text,
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning(f"Could not send reminder to {chat_id}: {e}")
+
+
+# --- Application Setup ---
+def main():
+    app = ApplicationBuilder().token(config.BOT_TOKEN).build()
+
+    onboarding_conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            ONBOARDING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_user)]
+        },
+        fallbacks=[CommandHandler("start", start)]
+    )
+
+    riyaz_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(menu_router, pattern="^menu_.*")],
+        states={
+            RIYAZ_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_riyaz_text),
+                CallbackQueryHandler(handle_riyaz_button, pattern="^(riyaz_.*|menu_back)$")
+            ],
+            VOICE_NOTE_INPUT: [
+                MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_note),
+                CallbackQueryHandler(menu_router, pattern="^menu_back$")
+            ]
+        },
+        fallbacks=[CommandHandler("start", start)],
+        per_message=False
+    )
+
+    app.add_handler(onboarding_conv)
+    app.add_handler(riyaz_conv)
+    app.add_handler(CallbackQueryHandler(log_attendance_action, pattern="^att_.*"))
+
+    job_queue = app.job_queue
+    if job_queue:
+        target_time = time(hour=23, minute=0, second=0, tzinfo=config.IST)
+        job_queue.run_daily(daily_broadcast, time=target_time, name="daily_reminder_11pm")
+        logger.info("Scheduled daily broadcast for 23:00 IST.")
+    else:
+        logger.warning("JobQueue is not available. Install 'python-telegram-bot[job-queue]'.")
+
+    logger.info("Zikre Husain Bot is now running...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="config.py">
+import os
+import sys
+import pytz
+
+# Timezone Configuration
+IST = pytz.timezone('Asia/Kolkata')
+
+# Environment Variables
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+SHEET_ID = os.getenv('SHEET_ID')
+ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
+SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE', 'service_account.json')
+
+# Validate required configurations
+def validate_config():
+    missing = []
+    if not BOT_TOKEN:
+        missing.append('BOT_TOKEN')
+    if not SHEET_ID:
+        missing.append('SHEET_ID')
+    if not ADMIN_CHAT_ID:
+        missing.append('ADMIN_CHAT_ID')
+    if not os.path.exists(SERVICE_ACCOUNT_FILE):
+        missing.append(f"Service account file not found at: {SERVICE_ACCOUNT_FILE}")
+
+    if missing:
+        print(f"CRITICAL ERROR: Missing configuration for: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
+
+validate_config()
+</file>
+
+<file path="requirements.txt">
+python-telegram-bot[job-queue]>=20.7
+gspread>=5.12.0
+google-auth>=2.25.0
+pytz>=2023.3
+</file>
+
+<file path="sheets.py">
+from datetime import datetime, timedelta
+import gspread
+from google.oauth2.service_account import Credentials
+import config
+
+
+class GoogleSheetsManager:
+    def __init__(self):
+        self.scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        self.client = None
+        self.sheet = None
+        self._authenticate()
+
+    def _authenticate(self):
+        """Authenticates with Google Sheets API using the Service Account."""
+        try:
+            creds = Credentials.from_service_account_file(
+                config.SERVICE_ACCOUNT_FILE, scopes=self.scopes
+            )
+            self.client = gspread.authorize(creds)
+            self.sheet = self.client.open_by_key(config.SHEET_ID)
+        except Exception as e:
+            print(f"Error authenticating with Google Sheets: {e}")
+            raise
+
+    def _get_worksheet(self, name: str):
+        """Fetches a worksheet with basic retry logic for session expiration."""
+        try:
+            return self.sheet.worksheet(name)
+        except gspread.exceptions.APIError:
+            self._authenticate()
+            return self.sheet.worksheet(name)
+
+    # --- User Management ---
+    def get_user(self, telegram_id: int):
+        """Returns user dict if registered, else None."""
+        ws = self._get_worksheet("Users")
+        records = ws.get_all_records()
+        for row in records:
+            if str(row.get("Telegram_ID")) == str(telegram_id):
+                return row
+        return None
+
+    def register_user(self, telegram_id: int, chat_id: int, name: str):
+        """Registers a new user to the Users sheet."""
+        ws = self._get_worksheet("Users")
+        ws.append_row([str(telegram_id), str(chat_id), name])
+
+    def get_all_chat_ids(self):
+        """Returns a list of all chat IDs for broadcasting."""
+        ws = self._get_worksheet("Users")
+        records = ws.get_all_records()
+        return [str(row["Chat_ID"]) for row in records if row.get("Chat_ID")]
+
+    # --- Duplicate Verification & Logging ---
+    def is_duplicate(self, worksheet_name: str, telegram_id: int, date_str: str, value_to_check: str, value_column_key: str) -> bool:
+        """Checks if an entry for the same user, date, and activity/kalaam already exists."""
+        ws = self._get_worksheet(worksheet_name)
+        records = ws.get_all_records()
+        for row in records:
+            if (str(row.get("ID")) == str(telegram_id) and
+                str(row.get("Date")) == str(date_str) and
+                str(row.get("Activity", row.get("Kalaam_Focused", ""))).strip().lower() == value_to_check.strip().lower()):
+                return True
+        return False
+
+    def log_attendance(self, telegram_id: int, name: str, activity: str) -> tuple[bool, str]:
+        """Logs attendance if not duplicate. Returns (Success, Message)."""
+        now = datetime.now(config.IST)
+        date_str = now.strftime("%d-%m-%Y")
+        time_str = now.strftime("%H:%M:%S")
+
+        if self.is_duplicate("Attendance_Log", telegram_id, date_str, activity, "Activity"):
+            return False, f"⚠️ You have already logged **{activity}** for today! Consistency is great, but duplicate entries are blocked."
+
+        ws = self._get_worksheet("Attendance_Log")
+        ws.append_row([str(telegram_id), name, date_str, time_str, activity])
+        return True, f"✅ Successfully logged attendance for **{activity}**!"
+
+    def log_riyaz(self, telegram_id: int, name: str, kalaam: str) -> tuple[bool, str]:
+        """Logs Riyaz if not duplicate. Returns (Success, Message)."""
+        now = datetime.now(config.IST)
+        date_str = now.strftime("%d-%m-%Y")
+        time_str = now.strftime("%H:%M:%S")
+
+        if self.is_duplicate("Riyaz_Log", telegram_id, date_str, kalaam, "Kalaam_Focused"):
+            return False, f"⚠️ You have already logged Riyaz for **{kalaam}** today! Consistency is great, but duplicate entries are blocked."
+
+        ws = self._get_worksheet("Riyaz_Log")
+        ws.append_row([str(telegram_id), name, date_str, time_str, kalaam])
+        return True, f"🎙️ Successfully logged Riyaz for: **{kalaam}**!"
+
+    # --- Progress Analytics ---
+    def get_weekly_progress(self, telegram_id: int) -> int:
+        """Calculates distinct days logged in Riyaz or Attendance in the last 7 days (IST)."""
+        now = datetime.now(config.IST)
+        valid_dates = {(now - timedelta(days=i)).strftime("%d-%m-%Y") for i in range(7)}
+        active_days = set()
+
+        for sheet_name in ["Attendance_Log", "Riyaz_Log"]:
+            ws = self._get_worksheet(sheet_name)
+            records = ws.get_all_records()
+            for row in records:
+                if str(row.get("ID")) == str(telegram_id):
+                    row_date = str(row.get("Date"))
+                    if row_date in valid_dates:
+                        active_days.add(row_date)
+
+        return len(active_days)
+
+
+# Singleton instance
+db = GoogleSheetsManager()
+</file>
+
+</files>
